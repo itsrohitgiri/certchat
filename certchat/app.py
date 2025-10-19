@@ -6,32 +6,26 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# LangChain imports
 from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatOpenAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-from langchain.vectorstores.base import VectorStoreRetriever
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages.human import HumanMessage
+
 
 load_dotenv()
 
 app = FastAPI()
-
-# Serve static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# ----------------------------
-# CONFIG
-# ----------------------------
 DB_FAISS_PATH = "vectorstore/db_faiss"
-DATA_PATH = "data"  # PDFs folder
+DATA_PATH = "data"
 
-# ----------------------------
-# EMBEDDINGS
-# ----------------------------
+# ---------------- EMBEDDINGS ----------------
 def get_embedding_model():
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
@@ -39,23 +33,21 @@ def get_embedding_model():
     )
 
 embedding_model = get_embedding_model()
-vectorstore: FAISS | None = None
+vectorstore = None
 
-# ----------------------------
-# HELPERS
-# ----------------------------
-def load_pdf_files(data_path: str) -> list[Document]:
+# ---------------- PDF LOADING ----------------
+def load_pdf_files(data_path):
     loader = DirectoryLoader(data_path, glob="*.pdf", loader_cls=PyPDFLoader)
     return loader.load()
 
-def create_chunks(documents: list[Document]) -> list[Document]:
+def create_chunks(documents):
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     return splitter.split_documents(documents)
 
-def build_vectorstore() -> FAISS | None:
+def build_vectorstore():
     documents = load_pdf_files(DATA_PATH)
     if not documents:
-        print(f"⚠️ No PDFs found in {DATA_PATH}.")
+        print(f"⚠️ No PDFs found in {DATA_PATH}. Add PDFs there first.")
         return None
     chunks = create_chunks(documents)
     db = FAISS.from_documents(chunks, embedding_model)
@@ -64,12 +56,10 @@ def build_vectorstore() -> FAISS | None:
     print(f"✅ FAISS index created with {len(chunks)} chunks.")
     return db
 
-# ----------------------------
-# LOAD OR CREATE VECTORSTORE
-# ----------------------------
+# ---------------- LOAD OR CREATE VECTORSTORE ----------------
 if os.path.exists(DB_FAISS_PATH) and os.path.isdir(DB_FAISS_PATH):
     try:
-        vectorstore = FAISS.load_local(DB_FAISS_PATH, embedding_model)
+        vectorstore = FAISS.load_local(DB_FAISS_PATH, embedding_model, allow_dangerous_deserialization=True)
         print("✅ FAISS index loaded.")
     except Exception as e:
         print(f"⚠️ Could not load FAISS index: {e}")
@@ -77,50 +67,47 @@ if os.path.exists(DB_FAISS_PATH) and os.path.isdir(DB_FAISS_PATH):
 else:
     vectorstore = build_vectorstore()
 
-# ----------------------------
-# PROMPT
-# ----------------------------
-def get_custom_prompt() -> PromptTemplate:
-    template = """
-Use the following context to answer the question.
-If the answer is not contained, respond: "I don't know."
+# ---------------- LCEL / ChatPipeline ----------------
+qa_pipeline = None
+if vectorstore:
 
-Context: {context}
-Question: {question}
+    llm = ChatOpenAI(
+        model_name="gpt-4o-mini",
+        temperature=0.0,
+        openai_api_key=os.environ.get("OPENAI_API_KEY")
+    )
+
+    # ----- Prompt in old style: Question -> Context -> Answer -----
+    prompt = ChatPromptTemplate.from_template("""
+Question:
+{question}
+
+Context:
+{context}
 
 Answer directly:
-"""
-    return PromptTemplate(template=template, input_variables=["context", "question"])
+""")
 
-# ----------------------------
-# LLM + RETRIEVAL SETUP
-# ----------------------------
-llm = ChatOpenAI(
-    model_name="gpt-4o-mini",
-    temperature=0.0,
-    openai_api_key=os.environ.get("OPENAI_API_KEY")
-)
+    # Fetch top-k relevant documents from FAISS
+    def retrieve_and_format_docs(question: str, k: int = 3):
+        docs = vectorstore.similarity_search(question, k=k)
+        context = "\n\n".join([doc.page_content for doc in docs])
+        return context
 
-retriever: VectorStoreRetriever | None = vectorstore.as_retriever(search_kwargs={"k": 3}) if vectorstore else None
-prompt = get_custom_prompt()
+    # Main pipeline
+    def ask_question(question: str) -> str:
+        context = retrieve_and_format_docs(question)
+        if not context:
+            return "No documents found for the question."
+        human_msg = HumanMessage(content=prompt.format_prompt(context=context, question=question).to_string())
+        response = llm.generate([[human_msg]])  # use generate with list of messages
+        return response.generations[0][0].text
 
-# Simple query function combining retriever + LLM
-async def answer_query(question: str) -> str:
-    if retriever is None:
-        return "Vectorstore not available. Add PDFs first."
-    
-    docs = retriever.get_relevant_documents(question)
-    context = "\n\n".join([d.page_content for d in docs])
-    
-    # Create LLM input using prompt template
-    input_text = prompt.format(context=context, question=question)
-    
-    # Get answer from LLM
-    return llm.generate([input_text]).generations[0][0].text
+    qa_pipeline = ask_question
+else:
+    print("⚠️ QA pipeline not initialized. No vectorstore available.")
 
-# ----------------------------
-# ROUTES
-# ----------------------------
+# ---------------- ROUTES ----------------
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -130,8 +117,10 @@ class Query(BaseModel):
 
 @app.post("/chat")
 async def chat(query: Query):
+    if qa_pipeline is None:
+        return JSONResponse({"error": "Vectorstore not available. Add PDFs to build knowledge base."}, status_code=500)
     try:
-        answer = await answer_query(query.question)
+        answer = qa_pipeline(query.question)
         return JSONResponse({"answer": answer})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
