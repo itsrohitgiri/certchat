@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-langchain
+langchain==0.1.232
 langchain-community
 langchain-huggingface
 langchain-openai
