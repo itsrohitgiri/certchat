@@ -1,10 +1,12 @@
-fastapi==0.115.11
-uvicorn==0.32.0
-pydantic==2.10.6
-python-dotenv==1.0.1
-jinja2==3.1.6
-langchain==0.1.0  # replace with your latest version if needed
-langchain-openai==0.0.1
-langchain-huggingface==0.0.1
-langchain-community==0.0.1
-faiss-cpu==1.7.4
+fastapi
+pydantic
+python-dotenv
+jinja2
+uvicorn
+langchain
+langchain-openai
+langchain-huggingface
+langchain-community
+langchain-llms
+langchain-embeddings
+faiss-cpu
