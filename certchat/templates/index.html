@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF Chatbot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Floating Chat Button -->
+  <button id="chatbot-btn" aria-label="Open chat" style="background: none; border: none; cursor: pointer;">
+  <img 
+    src="https://bb.branding-element.com/prod/130995/130995-ChatGPT_Image_Jun_24__2025__03_38_10_PM-removebg-preview.png" 
+    alt="Open chat" 
+    style="width: 100px; height: 100px; border-radius: 50%;"
+  />
+  </button>
+
+  <!-- Fullscreen Answer Modal -->
+<div id="full-answer-modal" class="modal">
+  <div class="modal-content">
+    <span id="modal-close">&times;</span>
+    <div id="modal-text"></div>
+  </div>
+</div>
+
+  <!-- Chat Window -->
+  <div id="chatbot-window" aria-hidden="true">
+    <div id="chat-header">Ask anything about this site</div>
+    <div id="chat-messages" role="log" aria-live="polite"></div>
+    <div id="chat-input">
+      <input id="user-input" type="text" placeholder="Type your question..." aria-label="Type your question" />
+      <button id="send-btn" aria-label="Send">➤</button>
+    </div>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
